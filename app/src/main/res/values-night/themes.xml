@@ -1,0 +1,20 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Base.Theme.Canetrack" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Match circle_blue color (#4f8ef7) -->
+        <item name="colorPrimary">#4f8ef7</item>
+
+        <!-- Dark Navy Background from image -->
+        <item name="android:windowBackground">#121421</item>
+
+        <!-- Card background from image -->
+        <item name="colorSurfaceVariant">#1F2232</item>
+
+        <!-- Primary Action (Track, Set Safe Zone): Light blue in dark mode -->
+        <item name="quickActionPrimaryBackground">#4f8ef7</item>
+        <!-- Other Actions match the card surface in dark mode -->
+        <item name="quickActionSecondaryBackground">#1F2232</item>
+        <!-- Icons and text are white -->
+        <item name="quickActionContentColor">#FFFFFF</item>
+    </style>
+</resources>

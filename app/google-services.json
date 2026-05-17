@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "492098305786",
+    "project_id": "canetrack-1142c",
+    "storage_bucket": "canetrack-1142c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:492098305786:android:d9a8939dff14b64cdf1343",
+        "android_client_info": {
+          "package_name": "com.example.canetrack"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAUAPZD7Oy0HoMB8krCqCANE5244NG0zpY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
