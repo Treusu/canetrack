@@ -14,11 +14,13 @@ import com.google.firebase.database.ValueEventListener;
 import org.osmdroid.config.Configuration;
 import org.osmdroid.events.MapEventsReceiver;
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
+import org.osmdroid.tileprovider.tilesource.XYTileSource;
 import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.MapEventsOverlay;
 import org.osmdroid.views.overlay.Marker;
 import org.osmdroid.views.overlay.Polygon;
+import android.preference.PreferenceManager;
 
 public class TrackerActivity extends AppCompatActivity {
 
@@ -48,7 +50,14 @@ public class TrackerActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        Configuration.getInstance().setUserAgentValue(getPackageName());
+
+        // Add this load() call first before setting User-Agent
+        Configuration.getInstance().load(
+                getApplicationContext(),
+                PreferenceManager.getDefaultSharedPreferences(getApplicationContext())
+        );
+        Configuration.getInstance().setUserAgentValue("CaneTrack/1.0 (com.example.canetrack)");
+
         setContentView(R.layout.tracker_activity);
 
         initViews();
@@ -75,7 +84,15 @@ public class TrackerActivity extends AppCompatActivity {
     }
 
     private void setupMap() {
-        mapView.setTileSource(TileSourceFactory.MAPNIK);
+        XYTileSource hotTiles = new XYTileSource(
+                "HOT",
+                1, 18, 256,
+                ".png",
+                new String[]{"https://a.tile.openstreetmap.fr/hot/",
+                        "https://b.tile.openstreetmap.fr/hot/",
+                        "https://c.tile.openstreetmap.fr/hot/"}
+        );
+        mapView.setTileSource(hotTiles);
         mapView.setMultiTouchControls(true);
         mapView.getController().setZoom(17.0);
 
