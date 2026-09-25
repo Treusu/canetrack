@@ -14,7 +14,7 @@
         <item name="quickActionPrimaryBackground">#4f8ef7</item>
         <!-- Other Actions match the card surface in dark mode -->
         <item name="quickActionSecondaryBackground">#1F2232</item>
-        <!-- Icons and text are white -->
+        <!-- Icons and text white -->
         <item name="quickActionContentColor">#FFFFFF</item>
     </style>
 </resources>

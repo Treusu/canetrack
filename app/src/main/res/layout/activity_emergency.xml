@@ -6,7 +6,7 @@
     android:orientation="vertical"
     android:background="?android:attr/windowBackground">
 
-    <!-- Toolbar area with back button -->
+    <!-- Toolbar -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -52,64 +52,35 @@
                 android:textStyle="bold"
                 android:layout_marginBottom="16dp"/>
 
-            <!-- Hardcoded Emergency Entry -->
-            <androidx.cardview.widget.CardView
+            <!-- No logs message (hidden when logs exist) -->
+            <TextView
+                android:id="@+id/tv_no_logs"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                app:cardCornerRadius="12dp"
-                app:cardElevation="2dp"
-                app:cardBackgroundColor="?attr/colorSurfaceVariant"
-                android:layout_marginBottom="16dp">
+                android:text="No emergency logs yet."
+                android:textColor="?android:attr/textColorSecondary"
+                android:gravity="center"
+                android:layout_marginTop="48dp"
+                android:visibility="gone"/>
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
+            <!-- Dynamic log cards inserted here by Java -->
+            <LinearLayout
+                android:id="@+id/logs_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"/>
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Location:"
-                        android:textColor="?android:attr/textColorSecondary"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginBottom="12dp"
-                        android:text="Capt. M. Reyes, Makati City, Metro Manila"
-                        android:textColor="?android:attr/textColorPrimary"
-                        android:textSize="14sp" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Date and time:"
-                        android:textColor="?android:attr/textColorSecondary"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Oct 27, 2023 - 10:44 AM"
-                        android:textColor="?android:attr/textColorPrimary"
-                        android:textSize="14sp" />
-
-                </LinearLayout>
-            </androidx.cardview.widget.CardView>
-
+            <!-- End of logs label -->
             <TextView
+                android:id="@+id/tv_end_of_logs"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="End of logs"
                 android:textColor="?android:attr/textColorSecondary"
                 android:gravity="center"
-                android:layout_marginTop="24dp"/>
+                android:layout_marginTop="24dp"
+                android:visibility="gone"/>
 
         </LinearLayout>
     </ScrollView>
-
 </LinearLayout>

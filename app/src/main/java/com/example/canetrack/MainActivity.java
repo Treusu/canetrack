@@ -5,7 +5,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.view.View;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
@@ -25,9 +24,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String DB_URL = "https://canetrack-1142c-default-rtdb.asia-southeast1.firebasedatabase.app";
 
     private TextView tvConnectionStatus;
-    private TextView tvBatteryLevel;
     private TextView tvLastLocation;
-    private ProgressBar progressBattery;
     private View indicatorConnection;
     private CardView btnTrack;
     private CardView btnSettings;
@@ -49,9 +46,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void initViews() {
         tvConnectionStatus  = findViewById(R.id.tv_connection_status);
-        tvBatteryLevel      = findViewById(R.id.tv_battery_level);
         tvLastLocation      = findViewById(R.id.tv_last_location);
-        progressBattery     = findViewById(R.id.progress_battery);
         indicatorConnection = findViewById(R.id.indicator_connection);
         btnTrack            = findViewById(R.id.btn_track);
         btnSettings         = findViewById(R.id.btn_settings);
@@ -59,11 +54,23 @@ public class MainActivity extends AppCompatActivity {
         btnEmergency        = findViewById(R.id.btn_emergency);
     }
 
+    private void writeEmergencyLog(String location) {
+        DatabaseReference logsRef = FirebaseDatabase
+                .getInstance("https://canetrack-1142c-default-rtdb.asia-southeast1.firebasedatabase.app")
+                .getReference("smartcane/emergency_logs");
+
+        String logId = logsRef.push().getKey(); // auto-generated unique key
+        if (logId == null) return;
+
+        long timestamp = System.currentTimeMillis();
+
+        logsRef.child(logId).child("location").setValue(location);
+        logsRef.child(logId).child("timestamp").setValue(timestamp);
+    }
     private void listenToFirebase() {
-        // Use the regional URL as suggested by the server error
         dbRef = FirebaseDatabase.getInstance("https://canetrack-1142c-default-rtdb.asia-southeast1.firebasedatabase.app").getReference("smartcane");
 
-        // ── Connection status ─────────────────────────────────────────────────
+        //Connection status
         dbRef.child("status").addValueEventListener(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
@@ -84,31 +91,30 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // ── Battery level ─────────────────────────────────────────────────────
-        dbRef.child("battery").addValueEventListener(new ValueEventListener() {
-            @Override
-            public void onDataChange(@NonNull DataSnapshot snapshot) {
-                Integer battery = snapshot.getValue(Integer.class);
-                if (battery != null) {
-                    tvBatteryLevel.setText(battery + "%");
-                    progressBattery.setProgress(battery);
-                }
-            }
 
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {}
-        });
-
-        // ── Last known location ───────────────────────────────────────────────
+        //Last known location
         dbRef.child("location").addValueEventListener(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
                 Double lat = snapshot.child("lat").getValue(Double.class);
                 Double lng = snapshot.child("lng").getValue(Double.class);
-                if (lat != null && lng != null) {
-                    tvLastLocation.setText(
-                            String.format("%.4f° N,  %.4f° E", lat, lng));
-                }
+
+                if (lat == null || lng == null) return;
+                tvLastLocation.setText("Locating...");
+
+                LocationHelper.reverseGeocode(lat, lng, new LocationHelper.ReverseGeocodeCallback() {
+                    @Override
+                    public void onAddressFound(String address) {
+                        tvLastLocation.setText(address);
+                    }
+
+                    @Override
+                    public void onError() {
+                        // Fallback
+                        tvLastLocation.setText(
+                                String.format("%.4f° N, %.4f° E", lat, lng));
+                    }
+                });
             }
 
             @Override
@@ -125,12 +131,50 @@ public class MainActivity extends AppCompatActivity {
 
         btnHistory.setOnClickListener(v ->
                 startActivity(new Intent(this, HistoryActivity.class)));
+        // TEMPORARY TEST BUTTON — remove after testing
+        findViewById(R.id.btn_test_emergency).setOnClickListener(v -> {
+            btnEmergency.performClick();
+        });
 
         btnEmergency.setOnClickListener(v -> {
-            // Write emergency flag to Firebase
+            // 1. Set emergency flag
             dbRef.child("emergency").setValue(true);
-            // Launch Emergency Activity layout
-            startActivity(new Intent(this, EmergencyActivity.class));
+
+            // 2. Fetch location THEN write log THEN open activity
+            dbRef.child("location").get()
+                    .addOnSuccessListener(snapshot -> {
+                        Double lat = snapshot.child("lat").getValue(Double.class);
+                        Double lng = snapshot.child("lng").getValue(Double.class);
+
+                        if (lat != null && lng != null) {
+                            LocationHelper.reverseGeocode(lat, lng,
+                                    new LocationHelper.ReverseGeocodeCallback() {
+                                        @Override
+                                        public void onAddressFound(String address) {
+                                            writeEmergencyLog(address);
+                                            startActivity(new Intent(MainActivity.this,
+                                                    EmergencyActivity.class));
+                                        }
+
+                                        @Override
+                                        public void onError() {
+                                            writeEmergencyLog(
+                                                    String.format("%.4f° N, %.4f° E", lat, lng));
+                                            startActivity(new Intent(MainActivity.this,
+                                                    EmergencyActivity.class));
+                                        }
+                                    });
+                        } else {
+                            writeEmergencyLog("Location unavailable");
+                            startActivity(new Intent(MainActivity.this,
+                                    EmergencyActivity.class));
+                        }
+
+                    }).addOnFailureListener(e -> {
+                        writeEmergencyLog("Location unavailable");
+                        startActivity(new Intent(MainActivity.this,
+                                EmergencyActivity.class));
+                    });
         });
     }
 

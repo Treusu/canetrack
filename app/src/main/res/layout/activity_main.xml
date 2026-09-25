@@ -97,50 +97,6 @@
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
-        <!-- Battery Card -->
-        <androidx.cardview.widget.CardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            app:cardCornerRadius="12dp"
-            app:cardBackgroundColor="?attr/colorSurfaceVariant"
-            app:cardElevation="0dp"
-            android:layout_marginBottom="16dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:padding="14dp"
-                android:gravity="center_vertical">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Battery"
-                    android:textColor="?android:attr/textColorPrimary"
-                    android:textSize="13sp"/>
-
-                <ProgressBar
-                    android:id="@+id/progress_battery"
-                    style="?android:attr/progressBarStyleHorizontal"
-                    android:layout_width="60dp"
-                    android:layout_height="8dp"
-                    android:progress="75"
-                    android:progressTint="?attr/colorPrimary"
-                    android:progressBackgroundTint="?attr/colorOnSurfaceVariant"/>
-
-                <TextView
-                    android:id="@+id/tv_battery_level"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="75%"
-                    android:textColor="?android:attr/textColorSecondary"
-                    android:textSize="11sp"
-                    android:layout_marginStart="8dp"/>
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
-
         <!-- Quick Actions -->
         <TextView
             android:layout_width="wrap_content"
@@ -340,6 +296,16 @@
                     android:textSize="13sp"/>
             </LinearLayout>
         </androidx.cardview.widget.CardView>
+        <!-- TEMPORARY — remove after testing -->
+        <Button
+            android:id="@+id/btn_test_emergency"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Test Emergency Log"
+            android:backgroundTint="#ef4444"
+            android:textColor="#FFFFFF"
+            android:layout_margin="16dp"/>
+
 
     </LinearLayout>
 </ScrollView>

@@ -2,6 +2,7 @@ package com.example.canetrack;
 
 import android.graphics.Color;
 import android.os.Bundle;
+import android.view.View;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
@@ -13,7 +14,6 @@ import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.database.ValueEventListener;
 import org.osmdroid.config.Configuration;
 import org.osmdroid.events.MapEventsReceiver;
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
 import org.osmdroid.tileprovider.tilesource.XYTileSource;
 import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.MapView;
@@ -28,10 +28,10 @@ public class TrackerActivity extends AppCompatActivity {
     private static final String DB_URL = "https://canetrack-1142c-default-rtdb.asia-southeast1.firebasedatabase.app";
 
     private MapView mapView;
-    private TextView tvLatitude;
-    private TextView tvLongitude;
+    private TextView tvAddress;       // replaces tvLatitude + tvLongitude
     private TextView tvSafeZoneStatus;
     private TextView tvLastUpdated;
+    private View     indicatorSafeZone;
 
     private DatabaseReference locationRef;
     private DatabaseReference safeZoneRef;
@@ -51,7 +51,6 @@ public class TrackerActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Add this load() call first before setting User-Agent
         Configuration.getInstance().load(
                 getApplicationContext(),
                 PreferenceManager.getDefaultSharedPreferences(getApplicationContext())
@@ -76,21 +75,21 @@ public class TrackerActivity extends AppCompatActivity {
     }
 
     private void initViews() {
-        mapView          = findViewById(R.id.map_view);
-        tvLatitude       = findViewById(R.id.tv_latitude);
-        tvLongitude      = findViewById(R.id.tv_longitude);
-        tvSafeZoneStatus = findViewById(R.id.tv_safe_zone_status);
-        tvLastUpdated    = findViewById(R.id.tv_last_updated);
+        mapView           = findViewById(R.id.map_view);
+        tvAddress         = findViewById(R.id.tv_address);      // new single address field
+        tvSafeZoneStatus  = findViewById(R.id.tv_safe_zone_status);
+        tvLastUpdated     = findViewById(R.id.tv_last_updated);
+        indicatorSafeZone = findViewById(R.id.indicator_safe_zone);
     }
 
     private void setupMap() {
         XYTileSource hotTiles = new XYTileSource(
-                "HOT",
-                1, 18, 256,
-                ".png",
-                new String[]{"https://a.tile.openstreetmap.fr/hot/",
+                "HOT", 1, 18, 256, ".png",
+                new String[]{
+                        "https://a.tile.openstreetmap.fr/hot/",
                         "https://b.tile.openstreetmap.fr/hot/",
-                        "https://c.tile.openstreetmap.fr/hot/"}
+                        "https://c.tile.openstreetmap.fr/hot/"
+                }
         );
         mapView.setTileSource(hotTiles);
         mapView.setMultiTouchControls(true);
@@ -108,7 +107,7 @@ public class TrackerActivity extends AppCompatActivity {
         mapView.getOverlays().add(safeZoneCenterMarker);
     }
 
-    // ── Read safe zone from Firebase ──────────────────────────────────────────
+    //Read safe zone from Firebase
     private void listenToSafeZone() {
         safeZoneRef = FirebaseDatabase.getInstance(DB_URL)
                 .getReference("smartcane/safezone");
@@ -138,7 +137,7 @@ public class TrackerActivity extends AppCompatActivity {
         });
     }
 
-    // ── Read live GPS location from Firebase ──────────────────────────────────
+    //Read live GPS location from Firebase
     private void listenToLocation() {
         locationRef = FirebaseDatabase.getInstance(DB_URL)
                 .getReference("smartcane/location");
@@ -154,10 +153,25 @@ public class TrackerActivity extends AppCompatActivity {
                 currentLat = lat;
                 currentLng = lng;
 
-                tvLatitude.setText(String.format("%.4f° N", lat));
-                tvLongitude.setText(String.format("%.4f° E", lng));
                 tvLastUpdated.setText("Just now");
+                tvAddress.setText("Locating...");
 
+                LocationHelper.reverseGeocode(lat, lng,
+                        new LocationHelper.ReverseGeocodeCallback() {
+                            @Override
+                            public void onAddressFound(String address) {
+                                tvAddress.setText(address);
+                            }
+
+                            @Override
+                            public void onError() {
+                                // Fallback to raw latitude and longitude
+                                tvAddress.setText(
+                                        String.format("%.4f° N, %.4f° E", lat, lng));
+                            }
+                        });
+
+                // Move marker on map
                 GeoPoint point = new GeoPoint(lat, lng);
                 userMarker.setPosition(point);
                 mapView.getController().animateTo(point);
@@ -173,7 +187,7 @@ public class TrackerActivity extends AppCompatActivity {
         });
     }
 
-    // ── Draw safe zone circle on map ──────────────────────────────────────────
+    //Draw safe zone circle on map 
     private void drawSafeZoneOnMap(double lat, double lng, double radius) {
         if (safeZoneCircle != null) {
             mapView.getOverlays().remove(safeZoneCircle);
@@ -192,7 +206,7 @@ public class TrackerActivity extends AppCompatActivity {
         mapView.invalidate();
     }
 
-    // ── Check if user is inside the safe zone ─────────────────────────────────
+    //Check if user is inside the safe zone
     private void checkSafeZoneStatus() {
         if (safeZoneLat == 0 && safeZoneLng == 0) return;
         if (currentLat == 0 && currentLng == 0) return;
@@ -204,13 +218,18 @@ public class TrackerActivity extends AppCompatActivity {
                 result);
 
         boolean inside = result[0] <= safeZoneRadius;
+
         tvSafeZoneStatus.setText(inside ? "Inside Safe Zone" : "Outside Safe Zone!");
         tvSafeZoneStatus.setTextColor(inside
                 ? Color.parseColor("#22c55e")
                 : Color.parseColor("#ef4444"));
+
+        indicatorSafeZone.setBackgroundResource(inside
+                ? R.drawable.circle_green
+                : R.drawable.circle_red);
     }
 
-    // ── Caregiver long-presses map to place new safe zone ────────────────────
+    //Caregiver long-presses map to place new safe zone
     private void enableSafeZonePlacement() {
         MapEventsOverlay eventsOverlay = new MapEventsOverlay(new MapEventsReceiver() {
             @Override
