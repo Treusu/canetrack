@@ -305,7 +305,5 @@
             android:backgroundTint="#ef4444"
             android:textColor="#FFFFFF"
             android:layout_margin="16dp"/>
-
-
     </LinearLayout>
 </ScrollView>

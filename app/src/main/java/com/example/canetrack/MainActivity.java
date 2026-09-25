@@ -22,7 +22,6 @@ public class MainActivity extends AppCompatActivity {
 
     private static final int PERMISSION_REQUEST_CODE = 100;
     private static final String DB_URL = "https://canetrack-1142c-default-rtdb.asia-southeast1.firebasedatabase.app";
-
     private TextView tvConnectionStatus;
     private TextView tvLastLocation;
     private View indicatorConnection;
@@ -30,6 +29,7 @@ public class MainActivity extends AppCompatActivity {
     private CardView btnSettings;
     private CardView btnHistory;
     private CardView btnEmergency;
+    private static final long HISTORY_LOG_INTERVAL = 30 * 60 * 1000; //time interval to update in history log; 30 mins
 
     private DatabaseReference dbRef;
 
@@ -56,21 +56,121 @@ public class MainActivity extends AppCompatActivity {
 
     private void writeEmergencyLog(String location) {
         DatabaseReference logsRef = FirebaseDatabase
-                .getInstance("https://canetrack-1142c-default-rtdb.asia-southeast1.firebasedatabase.app")
+                .getInstance(DB_URL)
                 .getReference("smartcane/emergency_logs");
 
-        String logId = logsRef.push().getKey(); // auto-generated unique key
+        // Save timestamp to SharedPreferences BEFORE writing
+        // This prevents duplicate logs if app reopens quickly
+        getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
+                .edit()
+                .putLong("last_emergency_handled", System.currentTimeMillis())
+                .apply();
+
+        // Check existing log count first — keep only 10 max
+        logsRef.get().addOnSuccessListener(snapshot -> {
+            long count = snapshot.getChildrenCount();
+
+            if (count >= 10) {
+                // Delete the oldest log entry before adding new one
+                DataSnapshot oldest = snapshot.getChildren().iterator().next();
+                oldest.getRef().removeValue();
+            }
+
+            // Write the new log
+            String logId = logsRef.push().getKey();
+            if (logId == null) return;
+
+            logsRef.child(logId).child("location").setValue(location);
+            logsRef.child(logId).child("timestamp").setValue(System.currentTimeMillis());
+        });
+    }
+
+    private void writeHistoryLog(String location) {
+        DatabaseReference logsRef = FirebaseDatabase
+                .getInstance(DB_URL)
+                .getReference("smartcane/history_logs");
+
+        String logId = logsRef.push().getKey();
         if (logId == null) return;
 
-        long timestamp = System.currentTimeMillis();
-
         logsRef.child(logId).child("location").setValue(location);
-        logsRef.child(logId).child("timestamp").setValue(timestamp);
+        logsRef.child(logId).child("timestamp").setValue(System.currentTimeMillis());
     }
-    private void listenToFirebase() {
-        dbRef = FirebaseDatabase.getInstance("https://canetrack-1142c-default-rtdb.asia-southeast1.firebasedatabase.app").getReference("smartcane");
 
-        //Connection status
+    /**
+     * Listens for the emergency flag set by the CANE (hardware / ESP32).
+     * When the cane flips emergency = true, this:
+     *   1. Resets the flag immediately
+     *   2. Fetches latest location, reverse-geocodes it
+     *   3. Writes an emergency log
+     *   4. Opens EmergencyActivity for the caregiver
+     */
+    private void attachEmergencyListener() {
+        dbRef.child("emergency").addValueEventListener(new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot snapshot) {
+                Boolean emergency = snapshot.getValue(Boolean.class);
+
+                // Only react when the cane sets the flag to true
+                if (emergency == null || !emergency) return;
+
+                // Reset the flag immediately so we don't handle the same event twice
+                dbRef.child("emergency").setValue(false);
+
+                // Handle the incoming emergency
+                handleIncomingEmergency();
+            }
+
+            @Override
+            public void onCancelled(@NonNull DatabaseError error) {}
+        });
+    }
+
+    /**
+     * Runs the emergency response flow when triggered by the cane.
+     * Never called from a UI tap.
+     */
+    private void handleIncomingEmergency() {
+        dbRef.child("location").get()
+                .addOnCompleteListener(task -> {
+                    if (task.isSuccessful() && task.getResult() != null) {
+                        Double lat = task.getResult().child("lat").getValue(Double.class);
+                        Double lng = task.getResult().child("lng").getValue(Double.class);
+
+                        if (lat != null && lng != null) {
+                            final double fLat = lat;
+                            final double fLng = lng;
+
+                            LocationHelper.reverseGeocode(lat, lng,
+                                    new LocationHelper.ReverseGeocodeCallback() {
+                                        @Override
+                                        public void onAddressFound(String address) {
+                                            writeEmergencyLog(address);
+                                            startActivity(new Intent(
+                                                    MainActivity.this, EmergencyActivity.class));
+                                        }
+
+                                        @Override
+                                        public void onError() {
+                                            writeEmergencyLog(String.format(
+                                                    "%.4f° N, %.4f° E", fLat, fLng));
+                                            startActivity(new Intent(
+                                                    MainActivity.this, EmergencyActivity.class));
+                                        }
+                                    });
+                            return;
+                        }
+                    }
+
+                    writeEmergencyLog("Location unavailable");
+                    startActivity(new Intent(MainActivity.this, EmergencyActivity.class));
+                });
+    }
+
+    private void listenToFirebase() {
+        dbRef = FirebaseDatabase.getInstance(DB_URL).getReference("smartcane");
+
+        // Connection status
         dbRef.child("status").addValueEventListener(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
@@ -91,8 +191,26 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        // Bootstrap: handle any leftover emergency = true from a previous session,
+        // then attach the live listener.
+        dbRef.child("emergency").addListenerForSingleValueEvent(new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot snapshot) {
+                Boolean emergency = snapshot.getValue(Boolean.class);
+                if (emergency != null && emergency) {
+                    dbRef.child("emergency").setValue(false);
+                    handleIncomingEmergency();  // handle emergency missed while app was closed
+                }
+                attachEmergencyListener();
+            }
 
-        //Last known location
+            @Override
+            public void onCancelled(@NonNull DatabaseError error) {
+                attachEmergencyListener();
+            }
+        });
+
+        // Last known location
         dbRef.child("location").addValueEventListener(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
@@ -102,19 +220,44 @@ public class MainActivity extends AppCompatActivity {
                 if (lat == null || lng == null) return;
                 tvLastLocation.setText("Locating...");
 
-                LocationHelper.reverseGeocode(lat, lng, new LocationHelper.ReverseGeocodeCallback() {
-                    @Override
-                    public void onAddressFound(String address) {
-                        tvLastLocation.setText(address);
-                    }
+                LocationHelper.reverseGeocode(lat, lng,
+                        new LocationHelper.ReverseGeocodeCallback() {
+                            @Override
+                            public void onAddressFound(String address) {
+                                tvLastLocation.setText(address);
 
-                    @Override
-                    public void onError() {
-                        // Fallback
-                        tvLastLocation.setText(
-                                String.format("%.4f° N, %.4f° E", lat, lng));
-                    }
-                });
+                                // Read last log time from SharedPreferences
+                                long lastLogTime = getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
+                                        .getLong("last_history_log_time", 0);
+
+                                long now = System.currentTimeMillis();
+                                if (now - lastLogTime >= HISTORY_LOG_INTERVAL) {
+                                    getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
+                                            .edit()
+                                            .putLong("last_history_log_time", now)
+                                            .apply();
+                                    writeHistoryLog(address);
+                                }
+                            }
+
+                            @Override
+                            public void onError() {
+                                String coords = String.format("%.4f° N, %.4f° E", lat, lng);
+                                tvLastLocation.setText(coords);
+
+                                long lastLogTime = getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
+                                        .getLong("last_history_log_time", 0);
+
+                                long now = System.currentTimeMillis();
+                                if (now - lastLogTime >= HISTORY_LOG_INTERVAL) {
+                                    getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
+                                            .edit()
+                                            .putLong("last_history_log_time", now)
+                                            .apply();
+                                    writeHistoryLog(coords);
+                                }
+                            }
+                        });
             }
 
             @Override
@@ -131,51 +274,16 @@ public class MainActivity extends AppCompatActivity {
 
         btnHistory.setOnClickListener(v ->
                 startActivity(new Intent(this, HistoryActivity.class)));
-        // TEMPORARY TEST BUTTON — remove after testing
-        findViewById(R.id.btn_test_emergency).setOnClickListener(v -> {
-            btnEmergency.performClick();
-        });
 
-        btnEmergency.setOnClickListener(v -> {
-            // 1. Set emergency flag
-            dbRef.child("emergency").setValue(true);
+        // Emergency card is now VIEW-ONLY — opens the log screen.
+        // The trigger comes from the cane (hardware) via Firebase.
+        btnEmergency.setOnClickListener(v ->
+                startActivity(new Intent(this, EmergencyActivity.class)));
 
-            // 2. Fetch location THEN write log THEN open activity
-            dbRef.child("location").get()
-                    .addOnSuccessListener(snapshot -> {
-                        Double lat = snapshot.child("lat").getValue(Double.class);
-                        Double lng = snapshot.child("lng").getValue(Double.class);
-
-                        if (lat != null && lng != null) {
-                            LocationHelper.reverseGeocode(lat, lng,
-                                    new LocationHelper.ReverseGeocodeCallback() {
-                                        @Override
-                                        public void onAddressFound(String address) {
-                                            writeEmergencyLog(address);
-                                            startActivity(new Intent(MainActivity.this,
-                                                    EmergencyActivity.class));
-                                        }
-
-                                        @Override
-                                        public void onError() {
-                                            writeEmergencyLog(
-                                                    String.format("%.4f° N, %.4f° E", lat, lng));
-                                            startActivity(new Intent(MainActivity.this,
-                                                    EmergencyActivity.class));
-                                        }
-                                    });
-                        } else {
-                            writeEmergencyLog("Location unavailable");
-                            startActivity(new Intent(MainActivity.this,
-                                    EmergencyActivity.class));
-                        }
-
-                    }).addOnFailureListener(e -> {
-                        writeEmergencyLog("Location unavailable");
-                        startActivity(new Intent(MainActivity.this,
-                                EmergencyActivity.class));
-                    });
-        });
+        // TEMPORARY TEST BUTTON — remove after hardware is integrated.
+        // Simulates the cane setting emergency = true in Firebase.
+        findViewById(R.id.btn_test_emergency).setOnClickListener(v ->
+                dbRef.child("emergency").setValue(true));
     }
 
     private void checkPermissions() {
