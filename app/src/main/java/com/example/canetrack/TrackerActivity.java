@@ -187,7 +187,7 @@ public class TrackerActivity extends AppCompatActivity {
         });
     }
 
-    //Draw safe zone circle on map 
+    //Draw safe zone circle on map
     private void drawSafeZoneOnMap(double lat, double lng, double radius) {
         if (safeZoneCircle != null) {
             mapView.getOverlays().remove(safeZoneCircle);
@@ -224,9 +224,9 @@ public class TrackerActivity extends AppCompatActivity {
                 ? Color.parseColor("#22c55e")
                 : Color.parseColor("#ef4444"));
 
-        indicatorSafeZone.setBackgroundResource(inside
-                ? R.drawable.circle_green
-                : R.drawable.circle_red);
+                indicatorSafeZone.setBackgroundResource(inside
+                        ? R.drawable.circle_green
+                        : R.drawable.circle_red);
     }
 
     //Caregiver long-presses map to place new safe zone

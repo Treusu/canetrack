@@ -91,7 +91,6 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="BT"
                     android:textColor="?android:attr/textColorSecondary"
                     android:textSize="11sp" />
             </LinearLayout>
@@ -296,7 +295,7 @@
                     android:textSize="13sp"/>
             </LinearLayout>
         </androidx.cardview.widget.CardView>
-        <!-- TEMPORARY — remove after testing -->
+        <!-- TEMPORARY — remove after testing
         <Button
             android:id="@+id/btn_test_emergency"
             android:layout_width="match_parent"
@@ -304,6 +303,6 @@
             android:text="Test Emergency Log"
             android:backgroundTint="#ef4444"
             android:textColor="#FFFFFF"
-            android:layout_margin="16dp"/>
+            android:layout_margin="16dp"/>-->
     </LinearLayout>
 </ScrollView>

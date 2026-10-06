@@ -54,6 +54,115 @@ public class MainActivity extends AppCompatActivity {
         btnEmergency        = findViewById(R.id.btn_emergency);
     }
 
+    // =====================================================================
+    // SHAPE-AGNOSTIC VALUE EXTRACTORS
+    //
+    // The ESP32 firmware is fixed and we don't know exactly what JSON shape
+    // it writes at /smartcane/status and /smartcane/emergency. Rather than
+    // assume, we walk the snapshot manually. These helpers never call
+    // getValue(X.class) on a node whose shape we're unsure of, so they
+    // can't throw a DatabaseException the way the old code did.
+    // =====================================================================
+
+    /**
+     * Pulls a status string out of /smartcane/status.
+     * Handles:
+     *   - "connected"                  (bare string)
+     *   - {token: "connected"}         (object, any single key)
+     *   - {value: "connected"}         (object, any single key)
+     *   - {anything: "connected"}      (object, any single key)
+     *   - {state: "connected", ts: ..} (object, multiple keys)
+     *   - nested {a: {b: "connected"}} (object, nested)
+     * Returns null if nothing usable is found.
+     */
+    private String extractStatusString(DataSnapshot snapshot) {
+        if (snapshot == null || !snapshot.exists()) return null;
+
+        // Case 1: the value at this path is a plain string.
+        Object raw = snapshot.getValue();
+        if (raw instanceof String) {
+            return (String) raw;
+        }
+
+        // Case 2: the value is an object / map. Look through children
+        // (and grandchildren) for a string that looks like our status.
+        String preferred = findStatusInChildren(snapshot, 0);
+        if (preferred != null) return preferred;
+
+        // Case 3: fall back to any string anywhere in the subtree.
+        return findAnyStringInChildren(snapshot, 0);
+    }
+
+    private String findStatusInChildren(DataSnapshot snapshot, int depth) {
+        if (depth > 3) return null;
+        for (DataSnapshot child : snapshot.getChildren()) {
+            Object v = child.getValue();
+            if (v instanceof String) {
+                String s = (String) v;
+                if ("connected".equals(s) || "disconnected".equals(s)) {
+                    return s;
+                }
+            } else if (v instanceof java.util.Map) {
+                String nested = findStatusInChildren(child, depth + 1);
+                if (nested != null) return nested;
+            }
+        }
+        return null;
+    }
+
+    private String findAnyStringInChildren(DataSnapshot snapshot, int depth) {
+        if (depth > 3) return null;
+        for (DataSnapshot child : snapshot.getChildren()) {
+            Object v = child.getValue();
+            if (v instanceof String) {
+                return (String) v;
+            } else if (v instanceof java.util.Map) {
+                String nested = findAnyStringInChildren(child, depth + 1);
+                if (nested != null) return nested;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Pulls a boolean flag out of /smartcane/emergency.
+     * Handles:
+     *   - true / false                 (bare boolean)
+     *   - "true" / "false"             (bare string)
+     *   - {token: true}                (object)
+     *   - {value: true}                (object)
+     *   - {anything: true}             (object)
+     * Returns null if nothing usable is found.
+     */
+    private Boolean extractEmergencyFlag(DataSnapshot snapshot) {
+        if (snapshot == null || !snapshot.exists()) return null;
+
+        Object raw = snapshot.getValue();
+        if (raw instanceof Boolean) return (Boolean) raw;
+        if (raw instanceof String)  return Boolean.parseBoolean((String) raw);
+
+        // It's an object. Walk children looking for a boolean or a string.
+        return findBoolInChildren(snapshot, 0);
+    }
+
+    private Boolean findBoolInChildren(DataSnapshot snapshot, int depth) {
+        if (depth > 3) return null;
+        for (DataSnapshot child : snapshot.getChildren()) {
+            Object v = child.getValue();
+            if (v instanceof Boolean) return (Boolean) v;
+            if (v instanceof String)  return Boolean.parseBoolean((String) v);
+            if (v instanceof java.util.Map) {
+                Boolean nested = findBoolInChildren(child, depth + 1);
+                if (nested != null) return nested;
+            }
+        }
+        return null;
+    }
+
+    // =====================================================================
+    // WRITE HELPERS (unchanged from original)
+    // =====================================================================
+
     private void writeEmergencyLog(String location) {
         DatabaseReference logsRef = FirebaseDatabase
                 .getInstance(DB_URL)
@@ -97,6 +206,10 @@ public class MainActivity extends AppCompatActivity {
         logsRef.child(logId).child("timestamp").setValue(System.currentTimeMillis());
     }
 
+    // =====================================================================
+    // EMERGENCY LISTENERS
+    // =====================================================================
+
     /**
      * Listens for the emergency flag set by the CANE (hardware / ESP32).
      * When the cane flips emergency = true, this:
@@ -109,7 +222,7 @@ public class MainActivity extends AppCompatActivity {
         dbRef.child("emergency").addValueEventListener(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
-                Boolean emergency = snapshot.getValue(Boolean.class);
+                Boolean emergency = extractEmergencyFlag(snapshot);
 
                 // Only react when the cane sets the flag to true
                 if (emergency == null || !emergency) return;
@@ -117,7 +230,6 @@ public class MainActivity extends AppCompatActivity {
                 // Reset the flag immediately so we don't handle the same event twice
                 dbRef.child("emergency").setValue(false);
 
-                // Handle the incoming emergency
                 handleIncomingEmergency();
             }
 
@@ -167,19 +279,27 @@ public class MainActivity extends AppCompatActivity {
                 });
     }
 
+    // =====================================================================
+    // FIREBASE LISTENERS
+    // =====================================================================
+
     private void listenToFirebase() {
         dbRef = FirebaseDatabase.getInstance(DB_URL).getReference("smartcane");
 
-        // Connection status
+        // ---------------------------------------------------------------
+        // Connection status — HARDENED to accept any shape the firmware
+        // might write. The crash we saw (HashMap -> String) was because
+        // the app assumed the value was a bare string. Now it walks the
+        // snapshot and finds whatever string is inside.
+        // ---------------------------------------------------------------
         dbRef.child("status").addValueEventListener(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
-                String status = snapshot.getValue(String.class);
+                String status = extractStatusString(snapshot);
                 boolean connected = "connected".equals(status);
 
                 tvConnectionStatus.setText(connected
                         ? "Cane Connected" : "Cane Disconnected");
-
                 indicatorConnection.setBackgroundResource(connected
                         ? R.drawable.circle_green
                         : R.drawable.circle_red);
@@ -196,7 +316,7 @@ public class MainActivity extends AppCompatActivity {
         dbRef.child("emergency").addListenerForSingleValueEvent(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
-                Boolean emergency = snapshot.getValue(Boolean.class);
+                Boolean emergency = extractEmergencyFlag(snapshot);
                 if (emergency != null && emergency) {
                     dbRef.child("emergency").setValue(false);
                     handleIncomingEmergency();  // handle emergency missed while app was closed
@@ -226,7 +346,6 @@ public class MainActivity extends AppCompatActivity {
                             public void onAddressFound(String address) {
                                 tvLastLocation.setText(address);
 
-                                // Read last log time from SharedPreferences
                                 long lastLogTime = getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
                                         .getLong("last_history_log_time", 0);
 
@@ -265,6 +384,10 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    // =====================================================================
+    // BUTTONS & PERMISSIONS
+    // =====================================================================
+
     private void setButtonListeners() {
         btnTrack.setOnClickListener(v ->
                 startActivity(new Intent(this, TrackerActivity.class)));
@@ -280,10 +403,10 @@ public class MainActivity extends AppCompatActivity {
         btnEmergency.setOnClickListener(v ->
                 startActivity(new Intent(this, EmergencyActivity.class)));
 
-        // TEMPORARY TEST BUTTON — remove after hardware is integrated.
+        /* TEMPORARY TEST BUTTON — remove after hardware is integrated.
         // Simulates the cane setting emergency = true in Firebase.
         findViewById(R.id.btn_test_emergency).setOnClickListener(v ->
-                dbRef.child("emergency").setValue(true));
+                dbRef.child("emergency").setValue(true));*/
     }
 
     private void checkPermissions() {
