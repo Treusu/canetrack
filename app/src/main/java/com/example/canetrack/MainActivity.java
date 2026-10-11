@@ -1,8 +1,13 @@
 package com.example.canetrack;
 
 import android.Manifest;
+import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.TextView;
@@ -33,6 +38,23 @@ public class MainActivity extends AppCompatActivity {
 
     private DatabaseReference dbRef;
 
+    // Emergency dialog state
+    private AlertDialog emergencyDialog;
+
+    // Receives broadcast from the background service when an emergency
+    // is detected (or dismissed by the caregiver). Shows/hides the dialog.
+    private final BroadcastReceiver emergencyReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if ("EMERGENCY_TRIGGERED".equals(action)) {
+                showEmergencyDialog();
+            } else if ("EMERGENCY_DISMISSED".equals(action)) {
+                dismissEmergencyDialog();
+            }
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -42,6 +64,10 @@ public class MainActivity extends AppCompatActivity {
         checkPermissions();
         listenToFirebase();
         setButtonListeners();
+
+        // Start the background monitoring service
+        Intent serviceIntent = new Intent(this, CaneTrackAlertService.class);
+        ContextCompat.startForegroundService(this, serviceIntent);
     }
 
     private void initViews() {
@@ -55,6 +81,73 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // =====================================================================
+    // EMERGENCY DIALOG LIFECYCLE
+    // =====================================================================
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        IntentFilter filter = new IntentFilter();
+        filter.addAction("EMERGENCY_TRIGGERED");
+        filter.addAction("EMERGENCY_DISMISSED");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(emergencyReceiver, filter, RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(emergencyReceiver, filter);
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        unregisterReceiver(emergencyReceiver);
+    }
+
+    private void showEmergencyDialog() {
+        // Dismiss existing dialog if somehow showing already
+        if (emergencyDialog != null && emergencyDialog.isShowing()) {
+            emergencyDialog.dismiss();
+        }
+
+        emergencyDialog = new AlertDialog.Builder(this)
+                .setTitle("⚠️ EMERGENCY ALERT")
+                .setMessage("The smart cane user needs help!\n\nCheck their location immediately.")
+                .setIcon(android.R.drawable.ic_dialog_alert)
+                .setCancelable(false) // can't dismiss by tapping outside
+                .setPositiveButton("View Location", (dialog, which) -> {
+                    dismissEmergencyAlert();
+                    startActivity(new Intent(this, TrackerActivity.class));
+                })
+                .setNegativeButton("Dismiss", (dialog, which) -> {
+                    dismissEmergencyAlert();
+                })
+                .create();
+
+        // Make dialog appear even on lock screen
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            emergencyDialog.getWindow().addFlags(
+                    android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+                            android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON |
+                            android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+
+        emergencyDialog.show();
+    }
+
+    private void dismissEmergencyDialog() {
+        if (emergencyDialog != null && emergencyDialog.isShowing()) {
+            emergencyDialog.dismiss();
+        }
+    }
+
+    private void dismissEmergencyAlert() {
+        // Stop sound and vibration via the receiver
+        Intent dismissIntent = new Intent(this, AlertDismissReceiver.class);
+        sendBroadcast(dismissIntent);
+        dismissEmergencyDialog();
+    }
+
+    // =====================================================================
     // SHAPE-AGNOSTIC VALUE EXTRACTORS
     //
     // The ESP32 firmware is fixed and we don't know exactly what JSON shape
@@ -64,32 +157,17 @@ public class MainActivity extends AppCompatActivity {
     // can't throw a DatabaseException the way the old code did.
     // =====================================================================
 
-    /**
-     * Pulls a status string out of /smartcane/status.
-     * Handles:
-     *   - "connected"                  (bare string)
-     *   - {token: "connected"}         (object, any single key)
-     *   - {value: "connected"}         (object, any single key)
-     *   - {anything: "connected"}      (object, any single key)
-     *   - {state: "connected", ts: ..} (object, multiple keys)
-     *   - nested {a: {b: "connected"}} (object, nested)
-     * Returns null if nothing usable is found.
-     */
     private String extractStatusString(DataSnapshot snapshot) {
         if (snapshot == null || !snapshot.exists()) return null;
 
-        // Case 1: the value at this path is a plain string.
         Object raw = snapshot.getValue();
         if (raw instanceof String) {
             return (String) raw;
         }
 
-        // Case 2: the value is an object / map. Look through children
-        // (and grandchildren) for a string that looks like our status.
         String preferred = findStatusInChildren(snapshot, 0);
         if (preferred != null) return preferred;
 
-        // Case 3: fall back to any string anywhere in the subtree.
         return findAnyStringInChildren(snapshot, 0);
     }
 
@@ -124,16 +202,6 @@ public class MainActivity extends AppCompatActivity {
         return null;
     }
 
-    /**
-     * Pulls a boolean flag out of /smartcane/emergency.
-     * Handles:
-     *   - true / false                 (bare boolean)
-     *   - "true" / "false"             (bare string)
-     *   - {token: true}                (object)
-     *   - {value: true}                (object)
-     *   - {anything: true}             (object)
-     * Returns null if nothing usable is found.
-     */
     private Boolean extractEmergencyFlag(DataSnapshot snapshot) {
         if (snapshot == null || !snapshot.exists()) return null;
 
@@ -141,7 +209,6 @@ public class MainActivity extends AppCompatActivity {
         if (raw instanceof Boolean) return (Boolean) raw;
         if (raw instanceof String)  return Boolean.parseBoolean((String) raw);
 
-        // It's an object. Walk children looking for a boolean or a string.
         return findBoolInChildren(snapshot, 0);
     }
 
@@ -160,7 +227,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // =====================================================================
-    // WRITE HELPERS (unchanged from original)
+    // WRITE HELPERS
     // =====================================================================
 
     private void writeEmergencyLog(String location) {
@@ -168,24 +235,19 @@ public class MainActivity extends AppCompatActivity {
                 .getInstance(DB_URL)
                 .getReference("smartcane/emergency_logs");
 
-        // Save timestamp to SharedPreferences BEFORE writing
-        // This prevents duplicate logs if app reopens quickly
         getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
                 .edit()
                 .putLong("last_emergency_handled", System.currentTimeMillis())
                 .apply();
 
-        // Check existing log count first — keep only 10 max
         logsRef.get().addOnSuccessListener(snapshot -> {
             long count = snapshot.getChildrenCount();
 
             if (count >= 10) {
-                // Delete the oldest log entry before adding new one
                 DataSnapshot oldest = snapshot.getChildren().iterator().next();
                 oldest.getRef().removeValue();
             }
 
-            // Write the new log
             String logId = logsRef.push().getKey();
             if (logId == null) return;
 
@@ -210,24 +272,14 @@ public class MainActivity extends AppCompatActivity {
     // EMERGENCY LISTENERS
     // =====================================================================
 
-    /**
-     * Listens for the emergency flag set by the CANE (hardware / ESP32).
-     * When the cane flips emergency = true, this:
-     *   1. Resets the flag immediately
-     *   2. Fetches latest location, reverse-geocodes it
-     *   3. Writes an emergency log
-     *   4. Opens EmergencyActivity for the caregiver
-     */
     private void attachEmergencyListener() {
         dbRef.child("emergency").addValueEventListener(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
                 Boolean emergency = extractEmergencyFlag(snapshot);
 
-                // Only react when the cane sets the flag to true
                 if (emergency == null || !emergency) return;
 
-                // Reset the flag immediately so we don't handle the same event twice
                 dbRef.child("emergency").setValue(false);
 
                 handleIncomingEmergency();
@@ -238,10 +290,6 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    /**
-     * Runs the emergency response flow when triggered by the cane.
-     * Never called from a UI tap.
-     */
     private void handleIncomingEmergency() {
         dbRef.child("location").get()
                 .addOnCompleteListener(task -> {
@@ -258,8 +306,8 @@ public class MainActivity extends AppCompatActivity {
                                         @Override
                                         public void onAddressFound(String address) {
                                             writeEmergencyLog(address);
-                                            startActivity(new Intent(
-                                                    MainActivity.this, EmergencyActivity.class));
+                                           /* startActivity(new Intent(
+                                                    MainActivity.this, EmergencyActivity.class));*/
                                         }
 
                                         @Override
@@ -286,12 +334,6 @@ public class MainActivity extends AppCompatActivity {
     private void listenToFirebase() {
         dbRef = FirebaseDatabase.getInstance(DB_URL).getReference("smartcane");
 
-        // ---------------------------------------------------------------
-        // Connection status — HARDENED to accept any shape the firmware
-        // might write. The crash we saw (HashMap -> String) was because
-        // the app assumed the value was a bare string. Now it walks the
-        // snapshot and finds whatever string is inside.
-        // ---------------------------------------------------------------
         dbRef.child("status").addValueEventListener(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
@@ -311,15 +353,14 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // Bootstrap: handle any leftover emergency = true from a previous session,
-        // then attach the live listener.
+        // Bootstrap emergency flag, then attach live listener
         dbRef.child("emergency").addListenerForSingleValueEvent(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
                 Boolean emergency = extractEmergencyFlag(snapshot);
                 if (emergency != null && emergency) {
                     dbRef.child("emergency").setValue(false);
-                    handleIncomingEmergency();  // handle emergency missed while app was closed
+                    handleIncomingEmergency();
                 }
                 attachEmergencyListener();
             }
@@ -330,7 +371,6 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // Last known location
         dbRef.child("location").addValueEventListener(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
@@ -398,15 +438,8 @@ public class MainActivity extends AppCompatActivity {
         btnHistory.setOnClickListener(v ->
                 startActivity(new Intent(this, HistoryActivity.class)));
 
-        // Emergency card is now VIEW-ONLY — opens the log screen.
-        // The trigger comes from the cane (hardware) via Firebase.
         btnEmergency.setOnClickListener(v ->
                 startActivity(new Intent(this, EmergencyActivity.class)));
-
-        /* TEMPORARY TEST BUTTON — remove after hardware is integrated.
-        // Simulates the cane setting emergency = true in Firebase.
-        findViewById(R.id.btn_test_emergency).setOnClickListener(v ->
-                dbRef.child("emergency").setValue(true));*/
     }
 
     private void checkPermissions() {

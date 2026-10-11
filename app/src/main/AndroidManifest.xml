@@ -2,12 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Existing permissions -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"/>
+
+    <!-- Background service & alert permissions -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
         android:allowBackup="true"
@@ -18,7 +25,8 @@
         android:roundIcon="@drawable/canetrack_icon"
         android:supportsRtl="true"
         android:theme="@style/Theme.Canetrack"
-        android:usesCleartextTraffic="true"> >
+        android:usesCleartextTraffic="true">
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -27,6 +35,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
         <activity
             android:name=".TrackerActivity"
             android:exported="false" />
@@ -39,6 +48,27 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="false" />
+
+        <!-- Background monitoring service -->
+        <service
+            android:name=".CaneTrackAlertService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false"/>
+
+        <!-- Dismiss button receiver for emergency notification -->
+        <receiver
+            android:name=".AlertDismissReceiver"
+            android:exported="false"/>
+
+        <!-- Auto-restart service on phone reboot -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>
