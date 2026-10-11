@@ -29,25 +29,25 @@ public class CaneTrackAlertService extends Service {
     private static final String CHANNEL_EMERGENCY  = "canetrack_emergency";
     private static final int    NOTIF_FOREGROUND   = 10;
     private static final int    NOTIF_EMERGENCY    = 11;
+    public static volatile boolean alertActive = false;
+
+    // Action sent by AlertDismissReceiver (and by MainActivity's dialog)
+    // to tell the service to stop the alert.
+    public static final String ACTION_STOP_ALERT = "STOP_ALERT";
 
     private static final String DB_URL =
             "https://canetrack-1142c-default-rtdb.asia-southeast1.firebasedatabase.app";
 
-    // ── CONFIGURE YOUR ALERT SOUND HERE ───────────────────────────────────
-    // Option A — use a file from res/raw/ folder:
-    //   1. Add your sound file to app/src/main/res/raw/  (e.g. alert.mp3)
-    //   2. Change the line below to: R.raw.alert
-    //   Example: private static final int ALERT_SOUND_RES_ID = R.raw.alert;
-    //
-    // Option B — use the default system alarm sound (no file needed):
-    //   Leave ALERT_SOUND_RES_ID = -1 and the code will use RingtoneManager
-    //
     private static final int ALERT_SOUND_RES_ID = R.raw.alert;; // -1 = use system alarm
 
     private DatabaseReference emergencyRef;
     private ValueEventListener emergencyListener;
     private MediaPlayer        mediaPlayer;
     private Vibrator           vibrator;
+
+    // Guards against attaching a second Firebase listener on each
+    // onStartCommand() call (e.g. every dismiss broadcast).
+    private boolean emergencyListenerAttached = false;
 
     // ==========================================
     // LIFECYCLE
@@ -58,13 +58,31 @@ public class CaneTrackAlertService extends Service {
         super.onCreate();
         vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         createNotificationChannels();
+
+        alertActive = getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
+                .getBoolean("alert_active", false);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Show persistent foreground notification so Android keeps us alive
+        // Show the persistent foreground notification so Android keeps us alive.
+        // Safe to call repeatedly; Android just updates the same notification.
         startForeground(NOTIF_FOREGROUND, buildForegroundNotification());
-        listenForEmergency();
+
+        // Handle the "stop the alert" command if this start was triggered by
+        // AlertDismissReceiver or the MainActivity dialog.
+        if (intent != null && ACTION_STOP_ALERT.equals(intent.getAction())) {
+            stopAlert();
+            return START_STICKY;
+        }
+
+        // Otherwise, this is a normal service start (boot / app launch).
+        // Attach the Firebase listener, but only once.
+        if (!emergencyListenerAttached) {
+            listenForEmergency();
+            emergencyListenerAttached = true;
+        }
+
         return START_STICKY;
     }
 
@@ -74,6 +92,7 @@ public class CaneTrackAlertService extends Service {
         if (emergencyRef != null && emergencyListener != null) {
             emergencyRef.removeEventListener(emergencyListener);
         }
+        emergencyListenerAttached = false;
         stopAlert();
     }
 
@@ -92,13 +111,11 @@ public class CaneTrackAlertService extends Service {
                 .getInstance(DB_URL)
                 .getReference("smartcane/emergency");
 
-        // Single read on start — silently reset leftover true from previous session
         emergencyRef.addListenerForSingleValueEvent(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
                 Boolean emergency = snapshot.getValue(Boolean.class);
                 if (Boolean.TRUE.equals(emergency)) {
-                    // Leftover from previous session — reset silently
                     emergencyRef.setValue(false);
                 }
                 attachLiveEmergencyListener();
@@ -118,10 +135,7 @@ public class CaneTrackAlertService extends Service {
                 Boolean emergency = snapshot.getValue(Boolean.class);
                 if (!Boolean.TRUE.equals(emergency)) return;
 
-                // Reset flag immediately
                 emergencyRef.setValue(false);
-
-                // Trigger alert
                 triggerEmergencyAlert();
             }
 
@@ -136,6 +150,12 @@ public class CaneTrackAlertService extends Service {
     // ==========================================
 
     private void triggerEmergencyAlert() {
+        alertActive = true;
+        getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
+                .edit()
+                .putBoolean("alert_active", true)
+                .apply();
+
         playAlertSound();
         vibratePhone();
         showEmergencyNotification();
@@ -144,13 +164,11 @@ public class CaneTrackAlertService extends Service {
 
     private void playAlertSound() {
         try {
-            stopAlert(); // stop any existing sound first
+            stopAlert();
 
             if (ALERT_SOUND_RES_ID != -1) {
-                // ── Option A: play from res/raw/ ──────────────────────────
                 mediaPlayer = MediaPlayer.create(this, ALERT_SOUND_RES_ID);
             } else {
-                // ── Option B: use system alarm sound ─────────────────────
                 Uri alarmUri = android.media.RingtoneManager.getDefaultUri(
                         android.media.RingtoneManager.TYPE_ALARM);
                 if (alarmUri == null) {
@@ -167,7 +185,6 @@ public class CaneTrackAlertService extends Service {
                 mediaPlayer.prepare();
             }
 
-            // Max volume
             AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
             if (audioManager != null) {
                 audioManager.setStreamVolume(
@@ -176,7 +193,7 @@ public class CaneTrackAlertService extends Service {
                         0);
             }
 
-            mediaPlayer.setLooping(true); // keep playing until dismissed
+            mediaPlayer.setLooping(true);
             mediaPlayer.start();
 
         } catch (Exception e) {
@@ -186,20 +203,18 @@ public class CaneTrackAlertService extends Service {
 
     private void vibratePhone() {
         if (vibrator == null) return;
-        // Pattern: wait 0ms, vibrate 1s, wait 0.5s, vibrate 1s — repeat
         long[] pattern = {0, 1000, 500, 1000, 500, 1000};
         vibrator.vibrate(
-                VibrationEffect.createWaveform(pattern, 0)); // 0 = repeat from start
+                VibrationEffect.createWaveform(pattern, 0));
     }
 
     private void showEmergencyNotification() {
-        // Tapping the notification opens MainActivity
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 this, 0,
                 new Intent(this, MainActivity.class),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-        // Dismiss action — stops the sound and vibration
+        // Dismiss action — send the same STOP_ALERT command the dialog uses.
         Intent dismissIntent = new Intent(this, AlertDismissReceiver.class);
         PendingIntent dismissPending = PendingIntent.getBroadcast(
                 this, 0, dismissIntent,
@@ -207,7 +222,7 @@ public class CaneTrackAlertService extends Service {
 
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_EMERGENCY)
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
-                .setContentTitle("⚠️ EMERGENCY ALERT")
+                .setContentTitle("⚠EMERGENCY ALERT")
                 .setContentText("Smart Cane user needs help! Tap to open app.")
                 .setStyle(new NotificationCompat.BigTextStyle()
                         .bigText("Smart Cane user needs help!\nTap to open the app and check their location immediately."))
@@ -225,25 +240,33 @@ public class CaneTrackAlertService extends Service {
     }
 
     private void broadcastEmergencyToApp() {
-        // Tells MainActivity to show the popup dialog if app is open
         Intent broadcast = new Intent("EMERGENCY_TRIGGERED");
+        broadcast.setPackage(getPackageName());
         sendBroadcast(broadcast);
     }
 
-    // ==========================================
-    // STOP ALERT (called by AlertDismissReceiver)
-    // ==========================================
+    //stopping the alert
 
     public void stopAlert() {
+        alertActive = false;
+
+        getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
+                .edit()
+                .putBoolean("alert_active", false)
+                .apply();
+
         if (mediaPlayer != null) {
-            if (mediaPlayer.isPlaying()) mediaPlayer.stop();
+            try {
+                if (mediaPlayer.isPlaying()) mediaPlayer.stop();
+            } catch (IllegalStateException ignored) {}
             mediaPlayer.release();
             mediaPlayer = null;
         }
+
         if (vibrator != null) {
             vibrator.cancel();
         }
-        // Cancel the emergency notification
+
         NotificationManager manager =
                 (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager != null) manager.cancel(NOTIF_EMERGENCY);
@@ -258,7 +281,6 @@ public class CaneTrackAlertService extends Service {
                 (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager == null) return;
 
-        // Foreground channel — silent, just keeps service alive
         NotificationChannel foregroundChannel = new NotificationChannel(
                 CHANNEL_FOREGROUND,
                 "CaneTrack Background",
@@ -266,14 +288,13 @@ public class CaneTrackAlertService extends Service {
         foregroundChannel.setDescription("Monitors emergency alerts in background");
         manager.createNotificationChannel(foregroundChannel);
 
-        // Emergency channel — high priority, makes sound
         NotificationChannel emergencyChannel = new NotificationChannel(
                 CHANNEL_EMERGENCY,
                 "CaneTrack Emergency",
                 NotificationManager.IMPORTANCE_HIGH);
         emergencyChannel.setDescription("Emergency alerts from the smart cane");
         emergencyChannel.enableVibration(true);
-        emergencyChannel.setBypassDnd(true); // bypass Do Not Disturb
+        emergencyChannel.setBypassDnd(true);
         manager.createNotificationChannel(emergencyChannel);
     }
 

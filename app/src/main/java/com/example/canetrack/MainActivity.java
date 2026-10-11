@@ -91,9 +91,19 @@ public class MainActivity extends AppCompatActivity {
         filter.addAction("EMERGENCY_TRIGGERED");
         filter.addAction("EMERGENCY_DISMISSED");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(emergencyReceiver, filter, RECEIVER_EXPORTED);
+            registerReceiver(emergencyReceiver, filter, RECEIVER_NOT_EXPORTED);
         } else {
-            registerReceiver(emergencyReceiver, filter);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                registerReceiver(emergencyReceiver, filter, RECEIVER_NOT_EXPORTED);
+            }
+        }
+
+        boolean alerting = CaneTrackAlertService.alertActive
+                || getSharedPreferences("canetrack_prefs", MODE_PRIVATE)
+                .getBoolean("alert_active", false);
+
+        if (alerting) {
+            showEmergencyDialog();
         }
     }
 
@@ -110,7 +120,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         emergencyDialog = new AlertDialog.Builder(this)
-                .setTitle("⚠️ EMERGENCY ALERT")
+                .setTitle("⚠EMERGENCY ALERT")
                 .setMessage("The smart cane user needs help!\n\nCheck their location immediately.")
                 .setIcon(android.R.drawable.ic_dialog_alert)
                 .setCancelable(false) // can't dismiss by tapping outside
@@ -141,9 +151,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void dismissEmergencyAlert() {
-        // Stop sound and vibration via the receiver
-        Intent dismissIntent = new Intent(this, AlertDismissReceiver.class);
-        sendBroadcast(dismissIntent);
+        // Tell the service to stop sound + vibration directly.
+        Intent stopIntent = new Intent(this, CaneTrackAlertService.class);
+        stopIntent.setAction(CaneTrackAlertService.ACTION_STOP_ALERT);
+        startService(stopIntent);
+
+        Intent dismissed = new Intent("EMERGENCY_DISMISSED");
+        dismissed.setPackage(getPackageName());
+        sendBroadcast(dismissed);
+
         dismissEmergencyDialog();
     }
 
@@ -306,16 +322,12 @@ public class MainActivity extends AppCompatActivity {
                                         @Override
                                         public void onAddressFound(String address) {
                                             writeEmergencyLog(address);
-                                           /* startActivity(new Intent(
-                                                    MainActivity.this, EmergencyActivity.class));*/
                                         }
 
                                         @Override
                                         public void onError() {
                                             writeEmergencyLog(String.format(
                                                     "%.4f° N, %.4f° E", fLat, fLng));
-                                            startActivity(new Intent(
-                                                    MainActivity.this, EmergencyActivity.class));
                                         }
                                     });
                             return;
@@ -323,7 +335,6 @@ public class MainActivity extends AppCompatActivity {
                     }
 
                     writeEmergencyLog("Location unavailable");
-                    startActivity(new Intent(MainActivity.this, EmergencyActivity.class));
                 });
     }
 
