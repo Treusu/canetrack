@@ -38,7 +38,7 @@ public class CaneTrackAlertService extends Service {
     private static final String DB_URL =
             "https://canetrack-1142c-default-rtdb.asia-southeast1.firebasedatabase.app";
 
-    private static final int ALERT_SOUND_RES_ID = R.raw.alert;; // -1 = use system alarm
+    private static final int ALERT_SOUND_RES_ID = R.raw.alert; // -1 = use system alarm
 
     private DatabaseReference emergencyRef;
     private ValueEventListener emergencyListener;
@@ -65,19 +65,13 @@ public class CaneTrackAlertService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Show the persistent foreground notification so Android keeps us alive.
-        // Safe to call repeatedly; Android just updates the same notification.
         startForeground(NOTIF_FOREGROUND, buildForegroundNotification());
 
-        // Handle the "stop the alert" command if this start was triggered by
-        // AlertDismissReceiver or the MainActivity dialog.
         if (intent != null && ACTION_STOP_ALERT.equals(intent.getAction())) {
             stopAlert();
             return START_STICKY;
         }
 
-        // Otherwise, this is a normal service start (boot / app launch).
-        // Attach the Firebase listener, but only once.
         if (!emergencyListenerAttached) {
             listenForEmergency();
             emergencyListenerAttached = true;
@@ -103,6 +97,44 @@ public class CaneTrackAlertService extends Service {
     }
 
     // ==========================================
+    // SHAPE-AGNOSTIC BOOLEAN READER
+    //
+    // The ESP32 POSTs "true" to /smartcane/emergency. Firebase treats
+    // that POST as an append, so the value often ends up as an object
+    // with a generated child key (e.g. { -P3jX...: true }) rather than
+    // a bare boolean. These helpers tolerate any of those shapes:
+    //   - true / false                     (bare boolean)
+    //   - "true" / "false"                 (bare string)
+    //   - { <anykey>: true }               (object, any single key)
+    //   - { <anykey>: "true" }             (object, string value)
+    //   - nested objects up to 3 levels
+    // ==========================================
+
+    private Boolean coerceBool(DataSnapshot snapshot) {
+        if (snapshot == null || !snapshot.exists()) return null;
+
+        Object raw = snapshot.getValue();
+        if (raw instanceof Boolean) return (Boolean) raw;
+        if (raw instanceof String)  return Boolean.parseBoolean((String) raw);
+
+        return findBoolInChildren(snapshot, 0);
+    }
+
+    private Boolean findBoolInChildren(DataSnapshot snapshot, int depth) {
+        if (depth > 3) return null;
+        for (DataSnapshot child : snapshot.getChildren()) {
+            Object v = child.getValue();
+            if (v instanceof Boolean) return (Boolean) v;
+            if (v instanceof String)  return Boolean.parseBoolean((String) v);
+            if (v instanceof java.util.Map) {
+                Boolean nested = findBoolInChildren(child, depth + 1);
+                if (nested != null) return nested;
+            }
+        }
+        return null;
+    }
+
+    // ==========================================
     // FIREBASE EMERGENCY LISTENER
     // ==========================================
 
@@ -114,7 +146,7 @@ public class CaneTrackAlertService extends Service {
         emergencyRef.addListenerForSingleValueEvent(new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
-                Boolean emergency = snapshot.getValue(Boolean.class);
+                Boolean emergency = coerceBool(snapshot);
                 if (Boolean.TRUE.equals(emergency)) {
                     emergencyRef.setValue(false);
                 }
@@ -132,7 +164,9 @@ public class CaneTrackAlertService extends Service {
         emergencyListener = new ValueEventListener() {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
-                Boolean emergency = snapshot.getValue(Boolean.class);
+                // FIX: was snapshot.getValue(Boolean.class), which throws
+                // DatabaseException on the object shape the cane writes.
+                Boolean emergency = coerceBool(snapshot);
                 if (!Boolean.TRUE.equals(emergency)) return;
 
                 emergencyRef.setValue(false);
@@ -214,7 +248,6 @@ public class CaneTrackAlertService extends Service {
                 new Intent(this, MainActivity.class),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-        // Dismiss action — send the same STOP_ALERT command the dialog uses.
         Intent dismissIntent = new Intent(this, AlertDismissReceiver.class);
         PendingIntent dismissPending = PendingIntent.getBroadcast(
                 this, 0, dismissIntent,
@@ -245,7 +278,9 @@ public class CaneTrackAlertService extends Service {
         sendBroadcast(broadcast);
     }
 
-    //stopping the alert
+    // ==========================================
+    // STOP ALERT
+    // ==========================================
 
     public void stopAlert() {
         alertActive = false;

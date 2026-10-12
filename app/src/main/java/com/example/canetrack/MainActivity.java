@@ -120,7 +120,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         emergencyDialog = new AlertDialog.Builder(this)
-                .setTitle("⚠EMERGENCY ALERT")
+                .setTitle("EMERGENCY ALERT")
                 .setMessage("The smart cane user needs help!\n\nCheck their location immediately.")
                 .setIcon(android.R.drawable.ic_dialog_alert)
                 .setCancelable(false) // can't dismiss by tapping outside
